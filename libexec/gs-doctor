@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Check the setup on a login node: Slurm commands, cluster settings, partitions, GPU request, time limit, repository settings, virtualenv.
+#
+# usage: gs doctor
+# example: gs doctor
+# One line per check: ok, warn (works, but something may be missing) or fail. The partitions, their GPUs and their time limits come from
+# sinfo. It does not start a job, so it cannot see whether a program finds its GPU. Exit status 1 when any check fails.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-doctor
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_parse "$@"
+
+FAILED=0
+
+report() {
+    printf '%-5s %-16s %s\n' "$1" "$2" "$3"
+    if [[ "$1" == fail ]]; then
+        FAILED=1
+    fi
+}
+
+# The time limit of a partition in hours (sinfo prints D-HH:MM:SS, HH:MM:SS, MM:SS or infinite); empty when unlimited.
+partition_hours() {
+    sinfo -h -p "$1" -o %l | head -1 | awk '
+        /infinite|UNLIMITED/ { exit }
+        {
+            days = 0
+            if (split($1, part, "-") == 2) {
+                days = part[1]
+                $1 = part[2]
+            }
+            count = split($1, field, ":")
+            hours = (count == 3) ? field[1] + field[2] / 60 : field[1] / 60
+            print days * 24 + hours
+        }
+    '
+}
+
+# Check that the partition named by VAR exists, that its GPUs hold the request named by GRES_VAR, and that GS_MAX_HOURS fits its limit.
+check_partition() {
+    local variable="$1"
+    local gres_variable="${2:-}"
+    local partition="${!variable:-}"
+    local request
+    local hours
+    if [[ -z "${partition}" ]]; then
+        report warn "${variable}" "not set (gs env set CLUSTER ${variable} NAME)"
+        return
+    fi
+    if ! sinfo -h -o %P | tr -d '*' | grep -qxF "${partition}"; then
+        report fail "${variable}" "${partition} is not a partition (sinfo -o %P)"
+        return
+    fi
+    report ok "${variable}" "${partition}"
+    if [[ -n "${gres_variable}" ]]; then
+        # gpu:a100:1 asks for gpu:a100, gpu:1 for gpu
+        request="${!gres_variable:-}"
+        request="${request%:[0-9]*}"
+        if [[ -z "${request}" ]]; then
+            report warn "${gres_variable}" "not set"
+        elif sinfo -h -p "${partition}" -o %G | grep -qF "${request}"; then
+            report ok "${gres_variable}" "${!gres_variable}"
+        else
+            report fail "${gres_variable}" "${request} is not among the GPUs of ${partition} ($(sinfo -h -p "${partition}" -o %G | sort -u | paste -sd' ' -))"
+        fi
+    fi
+    hours="$(partition_hours "${partition}")"
+    if [[ -n "${GS_MAX_HOURS:-}" && -n "${hours}" ]] && awk -v a="${GS_MAX_HOURS}" -v b="${hours}" 'BEGIN { exit !(a > b) }'; then
+        report fail GS_MAX_HOURS "${GS_MAX_HOURS} h is above the limit of ${partition}, ${hours} h"
+    fi
+}
+
+# ---- Slurm and the cluster settings ----
+missing=""
+for command in sbatch squeue sacct scontrol sinfo; do
+    if ! command -v "${command}" > /dev/null; then
+        missing+=" ${command}"
+    fi
+done
+if [[ -n "${missing}" ]]; then
+    report fail slurm "not found:${missing}"
+    exit 1
+fi
+report ok slurm "$(sbatch --version)"
+if [[ -n "${GS_CLUSTER:-}" ]]; then
+    report ok GS_CLUSTER "${GS_CLUSTER}"
+else
+    report warn GS_CLUSTER "no cluster settings loaded (gs env show, gs env install)"
+fi
+check_partition GS_PARTITION GS_GRES
+check_partition GS_CPU_PARTITION
+if [[ -n "${GS_MAX_HOURS:-}" && -n "${GS_TARGET_HOURS:-}" ]]; then
+    report ok packing "target ${GS_TARGET_HOURS} h, job limit ${GS_MAX_HOURS} h"
+else
+    report warn packing "GS_MAX_HOURS or GS_TARGET_HOURS not set, needed by gs table"
+fi
+
+# ---- the repository and its virtualenv ----
+if [[ -n "${GS_ROOT:-}" ]]; then
+    report ok slurm.env "${GS_ROOT}/slurm.env"
+else
+    report warn slurm.env "none found upwards from ${PWD}"
+fi
+if [[ -n "${GS_COMMAND:-}" ]]; then
+    report ok GS_COMMAND "${GS_COMMAND}"
+else
+    report warn GS_COMMAND "not set, gs submit then needs --command"
+fi
+if [[ -n "${GS_VENV:-}" ]]; then
+    if (( BASH_VERSINFO[0] * 100 + BASH_VERSINFO[1] < 401 )) || ! command -v flock > /dev/null; then
+        report fail GS_VENV "gs_venv needs bash 4.1 and flock, this is bash ${BASH_VERSION}"
+    elif [[ -x "${GS_VENV}/bin/python" ]]; then
+        report ok GS_VENV "$("${GS_VENV}/bin/python" --version 2>&1)"
+    else
+        report warn GS_VENV "${GS_VENV} not built yet, the first job builds it"
+    fi
+fi
+exit "${FAILED}"
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

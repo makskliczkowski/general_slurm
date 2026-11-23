@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Submit one command or .slurm script as a single Slurm job.
+#
+# usage: gs run [--cpu] [--tag T] [--log-tag G] [--print] [--sbatch-option=VALUE...] [--] COMMAND [ARG...]
+# example: gs run --time=04:00:00 --mem=16G -- ./build/sim inputs/a.cfg --steps 100
+# Placement comes from the cluster settings (gs env). Any unknown option goes to sbatch as --option=value. When the first target is an
+# existing .slurm file, it is submitted directly; otherwise the command runs inside jobs/run.slurm with modules or GS_VENV loaded.
+# Logs go to GS_LOG_ROOT/<date>_<G>/<T>_<job>.log, where G is --log-tag or else --tag.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-run
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_variadic COMMAND "command or .slurm script and its arguments" 0
+gs_flag --cpu CPU "CPU partition instead of the GPU one"
+gs_option --tag TAG gs "job name"
+gs_option --log-tag LOG_TAG "" "log folder tag, the job name when empty"
+gs_flag --print PRINT "show the sbatch line, submit nothing"
+SBATCH_OPTIONS=()
+GS_UNKNOWN=SBATCH_OPTIONS
+gs_parse "$@"
+
+TARGET=(${COMMAND[@]+"${COMMAND[@]}"} ${GS_REST[@]+"${GS_REST[@]}"})
+if (( ${#TARGET[@]} == 0 )); then
+    gs_die "give a command or .slurm script ($(gs_usage_line))" 2
+fi
+
+# ---- placement and log folder ----
+if (( CPU )); then
+    gs_placement --cpu
+else
+    gs_placement
+fi
+LOGS="$(gs_logs "${LOG_TAG:-${TAG}}")"
+
+if (( ! PRINT )); then
+    mkdir -p "${LOGS}"
+fi
+
+# ---- preview or submit ----
+if [[ "${TARGET[0]}" == *.slurm && -f "${TARGET[0]}" ]]; then
+    gs_sbatch "${PRINT}" GS_HOME="${GS_HOME}" -- \
+        --export=ALL --job-name="${TAG}" --output="${LOGS}/%x_%j.log" "${GS_PLACEMENT[@]}" \
+        ${SBATCH_OPTIONS[@]+"${SBATCH_OPTIONS[@]}"} "${TARGET[@]}"
+else
+    gs_sbatch "${PRINT}" GS_HOME="${GS_HOME}" -- \
+        --export=ALL --job-name="${TAG}" --output="${LOGS}/%x_%j.log" "${GS_PLACEMENT[@]}" \
+        ${SBATCH_OPTIONS[@]+"${SBATCH_OPTIONS[@]}"} "${GS_HOME}/jobs/run.slurm" "${TARGET[@]}"
+fi
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

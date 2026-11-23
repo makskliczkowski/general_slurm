@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Check bash scripts against the standard layout: a summary line, "# usage:", "# example:", strict mode, valid syntax, and shellcheck.
+#
+# usage: gs check SCRIPT...
+# example: gs check jobs/*.slurm scripts/*.sh
+# The summary is the first comment line after the shebang and the #SBATCH lines; it is what --help prints. shellcheck runs at severity
+# warning when it is installed, and is reported as skipped otherwise. Exit status 1 when any script fails a check.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-check
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_variadic SCRIPTS "bash scripts"
+gs_parse "$@"
+
+FAILED=0
+
+# Print one finding of a script; a finding other than ok or skip fails the run.
+report() {
+    printf '  %-5s %s\n' "$1" "$2"
+    if [[ "$1" == fail ]]; then
+        FAILED=1
+    fi
+}
+
+# Report ok when the script has a line matching PATTERN, else fail with WHAT.
+has_line() {
+    if grep -qE "$2" "$1"; then
+        report ok "$3"
+    else
+        report fail "no $3"
+    fi
+}
+
+# ---- one block of findings per script ----
+for script in "${SCRIPTS[@]}"; do
+    echo "${script}"
+    if [[ ! -f "${script}" ]]; then
+        report fail "no such file"
+        continue
+    fi
+
+    summary="$(gs_summary "${script}")"
+    if [[ -n "${summary}" && ! "${summary}" =~ ^(usage|example): ]]; then
+        report ok "summary: ${summary}"
+    else
+        report fail "no summary line before # usage:"
+    fi
+    has_line "${script}" '^# usage: '           "# usage: line"
+    has_line "${script}" '^# example: '         "# example: line"
+    has_line "${script}" '^set -euo pipefail$'  "set -euo pipefail"
+
+    if bash -n "${script}" 2> /dev/null; then
+        report ok "syntax"
+    else
+        report fail "syntax (bash -n ${script})"
+    fi
+    if ! command -v shellcheck > /dev/null; then
+        report skip "shellcheck not installed"
+    elif shellcheck -S warning "${script}" > /dev/null; then
+        report ok "shellcheck"
+    else
+        report fail "shellcheck (shellcheck -S warning ${script})"
+    fi
+done
+exit "${FAILED}"
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Submit config files as one Slurm array: every task runs the command over every config, with its shard of each (jobs/shards.slurm).
+#
+# usage: gs submit CONFIG... [--command CMD] [--tasks N] [--max-running K] [--cpu] [--tag T] [--log-tag G] [--print] [--sbatch-option=VALUE...]
+# example: gs submit runs/a.ini --command "{GS_PYTHON} run.py {}" --tasks 4 --time=12:00:00 --print
+# CMD defaults to GS_COMMAND of slurm.env; "{}" is the config, "{NAME}" an environment variable. Any other option goes to sbatch, written as
+# --option=value. Placement comes from the cluster settings (gs env). Logs: GS_LOG_ROOT/<date>_<G>/<T>_<job>_<task>.log, G the log tag or else T.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-submit
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_variadic CONFIGS "config files"
+gs_option --command COMMAND "${GS_COMMAND:-}" "the command run per config"
+gs_option --tasks TASKS "${GS_TASKS_DEFAULT:-16}" "array tasks"
+gs_option --max-running LIMIT "" "at most this many tasks at once"
+gs_flag --cpu CPU "CPU partition instead of the GPU one"
+gs_option --tag TAG gs "job name"
+gs_option --log-tag LOG_TAG "" "log folder tag, the job name when empty"
+gs_flag --print PRINT "show the sbatch line, submit nothing"
+SBATCH_OPTIONS=()
+GS_UNKNOWN=SBATCH_OPTIONS
+gs_parse "$@"
+if [[ -z "${COMMAND}" ]]; then
+    gs_die "give --command or set GS_COMMAND in slurm.env" 2
+fi
+
+# ---- placement and log folder ----
+if (( CPU )); then
+    gs_placement --cpu
+else
+    gs_placement
+fi
+LOGS="$(gs_logs "${LOG_TAG:-${TAG}}")"
+ARRAY="0-$(( TASKS - 1 ))${LIMIT:+%${LIMIT}}"
+
+# ---- preview or submit; the job reads its configs and command from the environment ----
+echo "${#CONFIGS[@]} config(s) as ${TASKS} array tasks: ${CONFIGS[*]}"
+if (( ! PRINT )); then
+    # Slurm does not create the folder of --output
+    mkdir -p "${LOGS}"
+fi
+gs_sbatch "${PRINT}" GS_HOME="${GS_HOME}" GS_CONFIGS="${CONFIGS[*]}" GS_COMMAND="${COMMAND}" -- \
+    --export=ALL --job-name="${TAG}" --output="${LOGS}/%x_%A_%a.log" --array="${ARRAY}" "${GS_PLACEMENT[@]}" \
+    ${SBATCH_OPTIONS[@]+"${SBATCH_OPTIONS[@]}"} "${GS_HOME}/jobs/shards.slurm"
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

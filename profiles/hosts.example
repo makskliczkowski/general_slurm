@@ -1,0 +1,5 @@
+# Host-name pattern and cluster, one per line: copy to ~/.config/general_slurm/hosts, or add lines with "gs env host PATTERN CLUSTER".
+# The patterns are globs on the short host name of the login node. The first pattern that matches wins, so a narrow pattern goes before a
+# wide one that overlaps it.
+n2login*    clusterA
+login*      clusterB

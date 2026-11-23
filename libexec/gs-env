@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# Cluster settings by host name: show them, set or unset a variable, map host patterns to clusters, install the loader into ~/.bashrc.
+#
+# usage: gs env show | set CLUSTER NAME VALUE | unset CLUSTER NAME | host PATTERN CLUSTER | install [--project P] [--before PATTERN] [--print]
+# example: gs env host 'n2*' clusterA; gs env set clusterA GS_PARTITION gpu; gs env install; gs env show
+# The files live in GS_CONFIG_DIR (default ~/.config/general_slurm): hosts, <cluster>.sh and <project>/<cluster>.sh (lib/cluster.sh).
+# set and unset change <cluster>.sh, or <project>/<cluster>.sh with --project. host adds a pattern at the end, before another pattern with
+# --before, or changes the cluster of an existing pattern; the first pattern that matches wins. install writes or replaces the marked block
+# in ~/.bashrc (GS_BASHRC replaces the path); --print shows the block and changes nothing.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-env
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+source "${GS_HOME}/lib/cluster.sh"
+
+BEGIN_MARK="# >>> general_slurm >>>"
+END_MARK="# <<< general_slurm <<<"
+
+# ---- arguments ----
+gs_positional ACTION "show, set, unset, host or install"
+gs_variadic WORDS "the arguments of the action" 0
+gs_option --project PROJECT "" "project of the settings file"
+gs_option --before BEFORE "" "host pattern to insert before"
+gs_flag --print PRINT "show the ~/.bashrc block, change nothing"
+gs_parse "$@"
+
+# Require exactly COUNT words for the action.
+need_words() {
+    if (( ${#WORDS[@]} != $1 )); then
+        gs_die "${ACTION} takes $1 argument(s): $2" 2
+    fi
+}
+
+# The settings file of a cluster, of the project with --project.
+settings_file() {
+    echo "${GS_CONFIG_DIR}${PROJECT:+/${PROJECT}}/$1.sh"
+}
+
+# A value as a shell word: bare when it is plain, in double quotes when that is safe, else escaped.
+shell_word() {
+    if [[ "$1" =~ ^[A-Za-z0-9_./:@%+,=-]+$ ]]; then
+        echo "$1"
+    elif [[ "$1" != *[\"\$\`\\]* ]]; then
+        echo "\"$1\""
+    else
+        printf '%q\n' "$1"
+    fi
+}
+
+# Write the standard output of a command into FILE through a temporary file beside it.
+replace_file() {
+    local file="$1"
+    shift
+    "$@" > "${file}.new"
+    mv "${file}.new" "${file}"
+}
+
+set_variable() {
+    local file
+    local line
+    file="$(settings_file "$1")"
+    line="export $2=$(shell_word "$3")"
+    mkdir -p "$(dirname "${file}")"
+    if [[ ! -f "${file}" ]]; then
+        echo "# Settings of cluster $1${PROJECT:+ for ${PROJECT}}: export lines only (gs env set)." > "${file}"
+    fi
+    # the line goes through the environment: awk -v would rewrite its backslashes
+    replace_file "${file}" env GS_LINE="${line}" awk -v name="$2" '
+        $0 ~ "^export " name "=" { print ENVIRON["GS_LINE"]; done = 1; next }
+        { print }
+        END { if (!done) print ENVIRON["GS_LINE"] }
+    ' "${file}"
+    echo "${file}: ${line}"
+}
+
+unset_variable() {
+    local file
+    file="$(settings_file "$1")"
+    if [[ ! -f "${file}" ]]; then
+        gs_die "no settings file ${file}" 2
+    fi
+    replace_file "${file}" awk -v name="$2" '$0 !~ "^export " name "=" { print }' "${file}"
+    echo "${file}: $2 removed"
+}
+
+map_host() {
+    local hosts="${GS_CONFIG_DIR}/hosts"
+    mkdir -p "${GS_CONFIG_DIR}"
+    if [[ ! -f "${hosts}" ]]; then
+        echo "# Host-name pattern and cluster, one per line; the first pattern that matches wins (gs env host)." > "${hosts}"
+    fi
+    replace_file "${hosts}" awk -v pattern="$1" -v cluster="$2" -v before="${BEFORE}" '
+        $1 == pattern { print pattern, cluster; done = 1; next }
+        !done && before != "" && $1 == before { print pattern, cluster; done = 1 }
+        { print }
+        END { if (!done) print pattern, cluster }
+    ' "${hosts}"
+    echo "${hosts}: ${1} -> ${2}"
+}
+
+bashrc_block() {
+    echo "${BEGIN_MARK}"
+    echo "export GS_HOME=$(shell_word "${GS_HOME}")"
+    echo "source \"\${GS_HOME}/lib/cluster.sh\""
+    echo "gs_cluster_load"
+    echo "${END_MARK}"
+}
+
+install_loader() {
+    local bashrc="${GS_BASHRC:-${HOME}/.bashrc}"
+    local block
+    block="$(bashrc_block)"
+    if (( PRINT )); then
+        echo "${block}"
+        return
+    fi
+    touch "${bashrc}"
+    if grep -qxF "${BEGIN_MARK}" "${bashrc}"; then
+        # the block goes through the environment: awk -v does not take a value with newlines everywhere
+        replace_file "${bashrc}" env GS_BLOCK="${block}" awk -v begin="${BEGIN_MARK}" -v end="${END_MARK}" '
+            $0 == begin { print ENVIRON["GS_BLOCK"]; skip = 1; next }
+            skip && $0 == end { skip = 0; next }
+            !skip { print }
+        ' "${bashrc}"
+        echo "${bashrc}: general_slurm block updated"
+    else
+        printf '\n%s\n' "${block}" >> "${bashrc}"
+        echo "${bashrc}: general_slurm block added"
+    fi
+}
+
+show_settings() {
+    local cluster
+    local file
+    cluster="$(gs_cluster_detect)"
+    echo "host        $(gs_hostname)"
+    echo "cluster     ${cluster:-none (no pattern in ${GS_CONFIG_DIR}/hosts matches)}"
+    if [[ -n "${GS_CLUSTER:-}" && "${GS_CLUSTER}" != "${cluster}" ]]; then
+        echo "loaded      ${GS_CLUSTER} (this shell inherited another cluster)"
+    fi
+    if [[ -z "${cluster}" ]]; then
+        return
+    fi
+    for file in "${GS_CONFIG_DIR}/${cluster}.sh" "${GS_CONFIG_DIR}"/*/"${cluster}.sh"; do
+        if [[ -f "${file}" ]]; then
+            echo "${file}"
+            sed -n 's/^export /    /p' "${file}"
+        fi
+    done
+}
+
+# ---- the action ----
+case "${ACTION}" in
+    show)
+        need_words 0 ""
+        show_settings
+        ;;
+    set)
+        need_words 3 "CLUSTER NAME VALUE"
+        set_variable "${WORDS[0]}" "${WORDS[1]}" "${WORDS[2]}"
+        ;;
+    unset)
+        need_words 2 "CLUSTER NAME"
+        unset_variable "${WORDS[0]}" "${WORDS[1]}"
+        ;;
+    host)
+        need_words 2 "PATTERN CLUSTER"
+        map_host "${WORDS[0]}" "${WORDS[1]}"
+        ;;
+    install)
+        need_words 0 ""
+        install_loader
+        ;;
+    *)
+        gs_die "unknown action ${ACTION} ($(gs_usage_line))" 2
+        ;;
+esac
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

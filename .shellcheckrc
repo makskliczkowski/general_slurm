@@ -1,0 +1,6 @@
+# shellcheck settings of the bash library and tools.
+# SC1090, SC1091: the library sources its modules and the settings files by computed paths.
+# SC2034: the library sets variables that the calling script reads (GS_PLACEMENT, GS_LEFT, ...).
+# SC2254: host patterns of the host map are globs by design (lib/cluster.sh, gs_cluster_detect).
+shell=bash
+disable=SC1090,SC1091,SC2034,SC2254

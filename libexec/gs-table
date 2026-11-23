@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Submit the table of runs of a run folder: the runs of each selected line are packed into tasks, and each line becomes one array.
+#
+# usage: gs table RUN_FOLDER [WORD...] [--command CMD] [--print]
+# example: gs table runs/<run> full --print
+# RUN_FOLDER holds the configs, arrays.txt (lib/table.sh, gs_pack) and run.md; its name tags the jobs and the log folder. A WORD selects the
+# lines that contain it. Per line, the config is RUN_FOLDER/<CONFIG><GS_CONFIG_SUFFIX>, and GS_ROW_ARGS of slurm.env, with "{N}" for field N
+# of the line, is added to the command (for example "--filter _{2}"). KEY=VALUE options of a line go to sbatch as --KEY=VALUE, with cpus as
+# --cpus-per-task. Cluster settings: GS_MAX_HOURS (job time limit) and GS_TARGET_HOURS (packing target).
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-table
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_positional RUN_FOLDER "the run folder"
+gs_variadic WORDS "selection words" 0
+gs_option --command COMMAND "${GS_COMMAND:-}" "the command run per config"
+gs_flag --print PRINT "show the sbatch lines, submit nothing"
+gs_parse "$@"
+gs_need GS_MAX_HOURS "the job time limit of the partition in hours"
+gs_need GS_TARGET_HOURS "the packing target in hours"
+
+RUN_DIR="$(cd "${RUN_FOLDER}" && pwd)"
+RUN="$(basename "${RUN_DIR}")"
+TABLE="${RUN_DIR}/arrays.txt"
+if [[ ! -f "${TABLE}" ]]; then
+    gs_die "no arrays.txt in ${RUN_DIR}" 2
+fi
+echo "partition ${GS_PARTITION:-}, gres ${GS_GRES:-}, job limit ${GS_MAX_HOURS} h, packing target ${GS_TARGET_HOURS} h"
+
+# ---- one array per selected line ----
+PACKED="$(gs_pack "${TABLE}" "${GS_MAX_HOURS}" "${GS_TARGET_HOURS}" ${WORDS[@]+"${WORDS[@]}"})"
+while IFS=$'\t' read -r config labels runs per_task tasks limit options; do
+    read -ra fields <<< "${config} ${labels}"
+
+    # the command with the row arguments of this line
+    command="${COMMAND}"
+    for word in ${GS_ROW_ARGS:-}; do
+        for n in "${!fields[@]}"; do
+            word="${word//\{$(( n + 1 ))\}/${fields[n]}}"
+        done
+        command+=" ${word}"
+    done
+
+    # the job options of this line
+    extra=()
+    for option in ${options}; do
+        key="${option%%=*}"
+        if [[ "${key}" == cpus ]]; then
+            key=cpus-per-task
+        fi
+        extra+=("--${key}=${option#*=}")
+    done
+
+    echo "${config} ${labels}: ${runs} runs, ${per_task} per task, ${tasks} tasks of ${limit} h"
+    preview=()
+    if (( PRINT )); then
+        preview=(--print)
+    fi
+    "${GS_HOME}/libexec/gs-submit" "${RUN_DIR}/${config}${GS_CONFIG_SUFFIX:-}" --command "${command}" --tasks "${tasks}" \
+        --tag "${RUN}_${config}_${labels// /_}" --log-tag "${RUN}" --time="${limit}:00:00" ${extra[@]+"${extra[@]}"} \
+        ${preview[@]+"${preview[@]}"} < /dev/null
+done <<< "${PACKED}"
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

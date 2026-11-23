@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# The general_slurm command: gs SUBCOMMAND [ARGUMENTS], each subcommand a file libexec/gs-SUBCOMMAND.
+#
+# usage: gs check|doctor|env|new|rerun|run|status|submit|table [ARGUMENTS] [--help]
+# example: gs submit runs/a.ini runs/b.ini --tasks 4 --print
+# Without a subcommand it lists the subcommands with their summary lines.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs
+# -----------------------------------------------
+set -euo pipefail
+
+GS_HOME="$(cd "$(dirname "$(realpath -- "${BASH_SOURCE[0]}")")/.." && pwd)"
+export GS_HOME
+
+if (( $# == 0 )); then
+    echo "usage: gs SUBCOMMAND [ARGUMENTS] [--help]"
+    for file in "${GS_HOME}"/libexec/gs-*; do
+        printf '  %-10s %s\n' "${file##*/gs-}" "$(sed -n '2s/^# //p' "${file}")"
+    done
+    exit 2
+fi
+
+subcommand="${GS_HOME}/libexec/gs-$1"
+if [[ ! -x "${subcommand}" ]]; then
+    echo "gs: unknown subcommand $1" >&2
+    exit 2
+fi
+shift
+exec "${subcommand}" "$@"
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

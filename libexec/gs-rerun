@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Submit a failed single job or failed array tasks again: the same sbatch line with a new time limit or memory if given.
+#
+# usage: gs rerun JOBID [--states S1,S2] [--time T] [--mem M] [--print]
+# example: gs rerun 123456 --time=24:00:00 --print
+# The sbatch line comes from GS_LOG_ROOT/submissions.tsv, written by every submission through gs_sbatch, so run gs rerun from the folder
+# the job was submitted from. For an array, only tasks whose last sacct state matches --states are resubmitted, keeping the array limit (%K).
+# For a single job, it is resubmitted when its allocation state in sacct matches --states. The new submission is recorded too, so it can be
+# rerun in turn. Options of the old line are read in the form --name=value.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-rerun
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_positional JOB "the job id of the array"
+gs_option --states STATES FAILED,TIMEOUT,OUT_OF_MEMORY,NODE_FAIL "task states to rerun, comma separated"
+gs_option --time TIME "" "new time limit"
+gs_option --mem MEM "" "new memory per node"
+gs_flag --print PRINT "show the sbatch line, submit nothing"
+gs_parse "$@"
+
+# ---- the old sbatch line ----
+RECORD="${GS_LOG_ROOT:-logs}/submissions.tsv"
+if [[ ! -f "${RECORD}" ]]; then
+    gs_die "no ${RECORD}: run gs rerun from the folder the job was submitted from" 2
+fi
+LINE="$(awk -F'\t' -v job="${JOB}" '$1 == job { line = $3 } END { print line }' "${RECORD}")"
+if [[ -z "${LINE}" ]]; then
+    gs_die "job ${JOB} is not in ${RECORD}" 2
+fi
+# the line was written with printf %q by gs_sbatch, so it reads back as the same words
+eval "WORDS=(${LINE})"
+
+# ---- split the old line: the variables, sbatch, the array/time/mem options, and everything else ----
+VARIABLES=()
+OPTIONS=()
+ARRAY=""
+after_sbatch=0
+for word in "${WORDS[@]}"; do
+    if (( ! after_sbatch )); then
+        if [[ "${word}" == sbatch ]]; then
+            after_sbatch=1
+        else
+            VARIABLES+=("${word}")
+        fi
+        continue
+    fi
+    case "${word}" in
+        --array=*)
+            ARRAY="${word}"
+            ;;
+        --time=*)
+            TIME="${TIME:-${word#--time=}}"
+            ;;
+        --mem=*)
+            MEM="${MEM:-${word#--mem=}}"
+            ;;
+        *)
+            OPTIONS+=("${word}")
+            ;;
+    esac
+done
+
+# ---- the tasks or single job in the chosen states ----
+NEW=()
+if [[ -n "${ARRAY}" ]]; then
+    TASKS="$(sacct --jobs "${JOB}" --allocations --noheader --parsable2 --format=JobID,State | awk -F'|' -v states=",${STATES}," '
+        $1 ~ /_[0-9]+$/ {
+            split($2, state, " ")
+            if (index(states, "," state[1] ",")) {
+                task = $1
+                sub(/.*_/, "", task)
+                print task
+            }
+        }
+    ' | paste -sd, -)"
+    if [[ -z "${TASKS}" ]]; then
+        echo "job ${JOB}: no task in ${STATES}"
+        exit 0
+    fi
+    LIMIT=""
+    if [[ "${ARRAY}" == *%* ]]; then
+        LIMIT="%${ARRAY##*%}"
+    fi
+    NEW+=(--array="${TASKS}${LIMIT}")
+    echo "job ${JOB}: tasks ${TASKS}"
+else
+    MATCHED_STATE="$(sacct --jobs "${JOB}" --allocations --noheader --parsable2 --format=JobID,State | awk -F'|' -v job="${JOB}" -v states=",${STATES}," '
+        $1 == job {
+            split($2, state, " ")
+            if (index(states, "," state[1] ",")) {
+                print state[1]
+                exit
+            }
+        }
+    ')"
+    if [[ -z "${MATCHED_STATE}" ]]; then
+        echo "job ${JOB}: not in ${STATES}"
+        exit 0
+    fi
+    echo "job ${JOB}: rerunning (${MATCHED_STATE})"
+fi
+
+if [[ -n "${TIME}" ]]; then
+    NEW+=(--time="${TIME}")
+fi
+if [[ -n "${MEM}" ]]; then
+    NEW+=(--mem="${MEM}")
+fi
+
+gs_sbatch "${PRINT}" ${VARIABLES[@]+"${VARIABLES[@]}"} -- ${NEW[@]+"${NEW[@]}"} ${OPTIONS[@]+"${OPTIONS[@]}"}
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------

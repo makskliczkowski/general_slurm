@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Write a new script from a template: a job, an array task, a launcher, or a Python program that follows the contract.
+#
+# usage: gs new job|array|launcher|python PATH
+# example: gs new job jobs/fit.slurm
+# The templates are in templates/ (job.slurm, array.slurm, launcher.sh, job.py). An existing PATH is never overwritten. Bash scripts are
+# made executable. Replace the summary line and the work section, then run gs check PATH.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-new
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_positional KIND "job, array, launcher or python"
+gs_positional TARGET "the path of the new script"
+gs_parse "$@"
+
+case "${KIND}" in
+    job)
+        TEMPLATE=job.slurm
+        ;;
+    array)
+        TEMPLATE=array.slurm
+        ;;
+    launcher)
+        TEMPLATE=launcher.sh
+        ;;
+    python)
+        TEMPLATE=job.py
+        ;;
+    *)
+        gs_die "unknown kind ${KIND} ($(gs_usage_line))" 2
+        ;;
+esac
+if [[ -e "${TARGET}" ]]; then
+    gs_die "${TARGET} exists" 2
+fi
+
+# ---- the copy ----
+mkdir -p "$(dirname "${TARGET}")"
+cp "${GS_HOME}/templates/${TEMPLATE}" "${TARGET}"
+if [[ "${KIND}" != python ]]; then
+    chmod +x "${TARGET}"
+fi
+echo "${TARGET}: from templates/${TEMPLATE}"
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------
