@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Check the setup on a login node: Slurm commands, cluster settings, partitions, GPU request, time limit, repository settings, virtualenv.
 #
-# usage: gs doctor
-# example: gs doctor
+# usage: gs doctor [--job run|job|row|shards|table] [--lang python|cpp|bash] [--cpu]
+# example: gs doctor --job shards --lang python
 # One line per check: ok, warn (works, but something may be missing) or fail. The partitions, their GPUs and their time limits come from
 # sinfo. It does not start a job, so it cannot see whether a program finds its GPU. Exit status 1 when any check fails.
+# --job and --lang add a check of the settings that kind of job and language need, and a missing one fails with the command or file that
+# sets it. run is gs run, job and row are the job and array templates (they write into GS_DATA), shards is gs submit, table is gs table.
+# --cpu says the job runs on the CPU partition. python needs a virtualenv (GS_VENV), cpp warns when no modules are set.
+# GS_REQUIRED (space-separated names, set by the project in slurm.env) lists the project's own variables; each one that is empty fails,
+# with or without --job and --lang.
 # -----------------------------------------------
 # Author            : Maks Kliczkowski
 # File              : gs-doctor
@@ -13,6 +18,9 @@ set -euo pipefail
 source "${GS_HOME}/lib/gs.sh"
 
 # ---- arguments ----
+gs_option --job JOB "" "kind of job: run, job, row, shards or table"
+gs_option --lang PROGRAM_LANG "" "language of the program: python, cpp or bash"
+gs_flag --cpu CPU "the job runs on the CPU partition"
 gs_parse "$@"
 
 FAILED=0
@@ -119,6 +127,65 @@ if [[ -n "${GS_VENV:-}" ]]; then
     else
         report warn GS_VENV "${GS_VENV} not built yet, the first job builds it"
     fi
+fi
+
+# ---- what the chosen kind of job and language need ----
+needed=()
+case "${JOB}" in
+    "")
+        ;;
+    run)
+        ;;
+    job | row)
+        needed+=(GS_DATA)
+        ;;
+    shards)
+        needed+=(GS_COMMAND)
+        ;;
+    table)
+        needed+=(GS_COMMAND GS_MAX_HOURS GS_TARGET_HOURS)
+        ;;
+    *)
+        gs_die "unknown job kind ${JOB} (run, job, row, shards or table)" 2
+        ;;
+esac
+if [[ -n "${JOB}" ]]; then
+    if (( CPU )); then
+        needed+=(GS_CPU_PARTITION)
+    else
+        needed+=(GS_PARTITION GS_GRES)
+    fi
+fi
+case "${PROGRAM_LANG}" in
+    "" | bash)
+        ;;
+    python)
+        needed+=(GS_VENV)
+        ;;
+    cpp)
+        if [[ -z "${GS_MODULES:-}" ]]; then
+            report warn GS_MODULES "no modules set: a C++ program may need a compiler or libraries ($(gs_setting_where GS_MODULES))"
+        fi
+        ;;
+    *)
+        gs_die "unknown language ${PROGRAM_LANG} (python, cpp or bash)" 2
+        ;;
+esac
+missing=0
+for variable in ${needed[@]+"${needed[@]}"}; do
+    if [[ -z "${!variable:-}" ]]; then
+        report fail "${variable}" "needed by ${JOB:-the job}${PROGRAM_LANG:+ in ${PROGRAM_LANG}}, set it with $(gs_setting_where "${variable}")"
+        missing=1
+    fi
+done
+for variable in ${GS_REQUIRED:-}; do
+    if [[ -z "${!variable:-}" ]]; then
+        report fail "${variable}" "needed by this project (GS_REQUIRED), set it with $(gs_setting_where "${variable}")"
+        missing=1
+    fi
+done
+if [[ -n "${JOB}${PROGRAM_LANG}${GS_REQUIRED:-}" ]] && (( ! missing )); then
+    report ok needs "all settings of job=${JOB:--} lang=${PROGRAM_LANG:--}${GS_REQUIRED:+ and ${GS_REQUIRED}} are set"
 fi
 exit "${FAILED}"
 

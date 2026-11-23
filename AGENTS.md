@@ -2,7 +2,7 @@
 
 `general_slurm`: helpers for Slurm job scripts of any project and cluster. Bash library in `lib/`, the `gs` command in `bin/` with its
 subcommands in `libexec/`, the general job script `jobs/shards.slurm`, the Python package in `python/general_slurm/`, script templates in
-`templates/`, examples of a cluster settings file and a host map in `profiles/` (cluster selection by host name: `lib/cluster.sh`, `gs env`). The README is the documentation: settings, the contract, the script layout, the helpers.
+`templates/`, examples of a cluster settings file and a host map in `profiles/` (cluster selection by host name: `lib/cluster.sh`, `gs env`). The README is the first look and the install. `docs/` holds one file per topic: settings, setup, examples, jobs, commands, the library and the contract. `examples/` holds two small projects (C++, Python) that docs/examples.md uses.
 
 ## Rules
 

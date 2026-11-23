@@ -1,0 +1,13 @@
+# Read by gs_venv: the virtualenv GS_VENV is built from this file and rebuilt when it changes. The example has no dependencies.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "example-python"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = []
+
+[tool.setuptools]
+py-modules = []

@@ -4,7 +4,8 @@
 # usage: source "${GS_HOME}/lib/gs.sh"
 # Cluster settings come from the environment: the ~/.bashrc loader of lib/cluster.sh exports them on a login node, and a job inherits them.
 # This file loads the repository settings (the first slurm.env upwards from the working directory, KEY=VALUE lines that are read, never run;
-# a variable already set wins), then the modules.
+# a variable already set wins), names the project (GS_PROJECT, default the folder of slurm.env) and sources the settings of that project on
+# the cluster, which override the cluster settings and slurm.env; then the modules.
 # Works with bash 3.2 and later; gs_venv needs bash 4.1 and flock (Linux).
 # -----------------------------------------------
 # Author            : Maks Kliczkowski
@@ -42,14 +43,18 @@ while [[ "${gs_dir}" != / && ! -f "${gs_dir}/slurm.env" ]]; do
     gs_dir="${gs_dir%/*}"
     gs_dir="${gs_dir:-/}"
 done
+source "${GS_HOME}/lib/cluster.sh"
 if [[ -f "${gs_dir}/slurm.env" ]]; then
     export GS_ROOT="${GS_ROOT:-${gs_dir}}"
     gs_load_settings "${gs_dir}/slurm.env"
+    # the project is named in slurm.env, else by the folder of slurm.env
+    export GS_PROJECT="${GS_PROJECT:-${gs_dir##*/}}"
+    gs_project_load
 fi
 unset gs_dir
 
 # ---- the modules ----
-for gs_module in args frame job env requeue submit table; do
+for gs_module in args frame job env requeue submit table settings; do
     source "${GS_HOME}/lib/${gs_module}.sh"
 done
 unset gs_module

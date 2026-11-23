@@ -161,3 +161,32 @@ def test_doctor_fails_on_a_missing_partition_and_a_too_long_limit(tmp_path):
     lines   = {tuple(line.split()[:2]) for line in result.stdout.splitlines()}
     assert result.returncode == 1
     assert {("ok", "GS_PARTITION"), ("ok", "GS_GRES"), ("fail", "GS_CPU_PARTITION"), ("fail", "GS_MAX_HOURS")} <= lines
+
+
+def test_doctor_names_the_settings_a_job_kind_and_language_miss(tmp_path):
+    """A sharded Python job without GS_COMMAND and GS_VENV fails on both and says where to set them; with both set it passes."""
+    bin_dir = _stubs(tmp_path, sinfo=SINFO, sbatch="#!/bin/bash\necho slurm 24.05\n", squeue="", sacct="", scontrol="")
+    placed  = {"GS_PARTITION": "gpu", "GS_GRES": "gpu:a100:1"}
+    result  = _gs("doctor", "--job", "shards", "--lang", "python", cwd=tmp_path, bin_dir=bin_dir, **placed)
+    assert result.returncode == 1
+    assert "slurm.env: GS_COMMAND=VALUE" in result.stdout and "--project" in result.stdout
+    result  = _gs("doctor", "--job", "shards", "--lang", "python", cwd=tmp_path, bin_dir=bin_dir, GS_COMMAND="./sim {}", GS_VENV="venv", **placed)
+    assert "all settings of job=shards lang=python are set" in result.stdout
+
+
+def test_info_lists_settings_with_their_source_and_the_projects(tmp_path):
+    """gs info prints each set setting with the file it comes from, the settings left unset, and the projects of this cluster."""
+    config = tmp_path / "config"
+    (config / "alpha").mkdir(parents=True)
+    (config / "a.sh").write_text("export GS_PARTITION=gpu\n")
+    (config / "alpha" / "a.sh").write_text("export GS_DATA=/scratch/alpha\n")
+    repo   = tmp_path / "alpha"
+    repo.mkdir()
+    (repo / "slurm.env").write_text("GS_COMMAND=./sim {}\n")
+    result = _gs("info", cwd=repo, GS_CONFIG_DIR=str(config), GS_CLUSTER="a", GS_PARTITION="gpu", GS_DATA="/scratch/alpha")
+    text   = result.stdout
+    assert result.returncode == 0
+    assert "GS_PARTITION" in text and "cluster settings of a" in text
+    assert "/scratch/alpha" in text and "project settings for a" in text
+    assert "./sim {}" in text and "slurm.env" in text
+    assert "alpha  (this repository)" in text and "not set:" in text

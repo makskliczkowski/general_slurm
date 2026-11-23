@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Cluster settings by host name: show them, set or unset a variable, map host patterns to clusters, install the loader into ~/.bashrc.
+# Cluster settings by host name: set or unset a variable, map host patterns to clusters, install the loader into ~/.bashrc.
 #
-# usage: gs env show | set CLUSTER NAME VALUE | unset CLUSTER NAME | host PATTERN CLUSTER | install [--project P] [--before PATTERN] [--print]
-# example: gs env host 'n2*' clusterA; gs env set clusterA GS_PARTITION gpu; gs env install; gs env show
+# usage: gs env set CLUSTER NAME VALUE | unset CLUSTER NAME | host PATTERN CLUSTER | install [--project P] [--before PATTERN] [--print]
+# example: gs env host 'n2*' clusterA; gs env set clusterA GS_PARTITION gpu; gs env install
 # The files live in GS_CONFIG_DIR (default ~/.config/general_slurm): hosts, <cluster>.sh and <project>/<cluster>.sh (lib/cluster.sh).
 # set and unset change <cluster>.sh, or <project>/<cluster>.sh with --project. host adds a pattern at the end, before another pattern with
 # --before, or changes the cluster of an existing pattern; the first pattern that matches wins. install writes or replaces the marked block
@@ -19,7 +19,7 @@ BEGIN_MARK="# >>> general_slurm >>>"
 END_MARK="# <<< general_slurm <<<"
 
 # ---- arguments ----
-gs_positional ACTION "show, set, unset, host or install"
+gs_positional ACTION "set, unset, host or install"
 gs_variadic WORDS "the arguments of the action" 0
 gs_option --project PROJECT "" "project of the settings file"
 gs_option --before BEFORE "" "host pattern to insert before"
@@ -62,6 +62,10 @@ set_variable() {
     local line
     file="$(settings_file "$1")"
     line="export $2=$(shell_word "$3")"
+    # inside a repository, a project name other than its own is often a typo; setting another project from here is still allowed
+    if [[ -n "${PROJECT}" && -n "${GS_PROJECT:-}" && "${PROJECT}" != "${GS_PROJECT}" ]]; then
+        echo "gs env: warning: this repository is the project ${GS_PROJECT}, but the settings are for ${PROJECT}" >&2
+    fi
     mkdir -p "$(dirname "${file}")"
     if [[ ! -f "${file}" ]]; then
         echo "# Settings of cluster $1${PROJECT:+ for ${PROJECT}}: export lines only (gs env set)." > "${file}"
@@ -131,32 +135,8 @@ install_loader() {
     fi
 }
 
-show_settings() {
-    local cluster
-    local file
-    cluster="$(gs_cluster_detect)"
-    echo "host        $(gs_hostname)"
-    echo "cluster     ${cluster:-none (no pattern in ${GS_CONFIG_DIR}/hosts matches)}"
-    if [[ -n "${GS_CLUSTER:-}" && "${GS_CLUSTER}" != "${cluster}" ]]; then
-        echo "loaded      ${GS_CLUSTER} (this shell inherited another cluster)"
-    fi
-    if [[ -z "${cluster}" ]]; then
-        return
-    fi
-    for file in "${GS_CONFIG_DIR}/${cluster}.sh" "${GS_CONFIG_DIR}"/*/"${cluster}.sh"; do
-        if [[ -f "${file}" ]]; then
-            echo "${file}"
-            sed -n 's/^export /    /p' "${file}"
-        fi
-    done
-}
-
 # ---- the action ----
 case "${ACTION}" in
-    show)
-        need_words 0 ""
-        show_settings
-        ;;
     set)
         need_words 3 "CLUSTER NAME VALUE"
         set_variable "${WORDS[0]}" "${WORDS[1]}" "${WORDS[2]}"

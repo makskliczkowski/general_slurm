@@ -22,17 +22,36 @@ def _gs(*arguments, config, **variables):
     return subprocess.run([str(HOME / "bin" / "gs"), "env", *arguments], env=environment, capture_output=True, text=True, check=True).stdout
 
 
-def test_host_selects_its_cluster_and_project_files(tmp_path):
-    """Overlapping patterns: the first that matches wins. The cluster file and every project file of that cluster are loaded; another
-    cluster's files are not. Reference: the variables each host must see."""
+def test_host_selects_its_cluster_file(tmp_path):
+    """Overlapping patterns: the first that matches wins. Only the cluster file of the match is loaded, no project file at login."""
     (tmp_path / "hosts").write_text("n2login*  a\nlogin*  b\n")
     (tmp_path / "a.sh").write_text("export GS_PARTITION=gpu\n")
     (tmp_path / "b.sh").write_text("export GS_PARTITION=other\n")
     (tmp_path / "proj").mkdir()
     (tmp_path / "proj" / "a.sh").write_text("export PROJ_STORAGE=/scratch/a\n")
     show = 'gs_cluster_load; echo "$GS_CLUSTER $GS_PARTITION ${PROJ_STORAGE:-none}"'
-    assert _bash(show, tmp_path, "n2login1")[0].split() == ["a", "gpu", "/scratch/a"]
+    assert _bash(show, tmp_path, "n2login1")[0].split() == ["a", "gpu", "none"]
     assert _bash(show, tmp_path, "login3")[0].split() == ["b", "other", "none"]
+
+
+def test_project_settings_override_cluster_settings_for_that_project_only(tmp_path):
+    """Two projects on one cluster: each sees its own value of GS_PARTITION from <project>/<cluster>.sh, and a project without a file
+    keeps the cluster value. The project is named in slurm.env, else by the folder of slurm.env."""
+    config = tmp_path / "config"
+    (config / "alpha").mkdir(parents=True)
+    (config / "a.sh").write_text("export GS_PARTITION=gpu\nexport GS_MAX_HOURS=48\n")
+    (config / "alpha" / "a.sh").write_text("export GS_PARTITION=big\n")
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GS_")}
+    environment.update({"GS_HOME": str(HOME), "GS_CONFIG_DIR": str(config), "GS_CLUSTER": "a", "GS_PARTITION": "gpu", "GS_MAX_HOURS": "48"})
+    seen = {}
+    for name, text in (("alpha", ""), ("beta", ""), ("other", "GS_PROJECT=alpha\n")):
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "slurm.env").write_text(text)
+        result = subprocess.run(["bash", "-c", f'source "{HOME}/lib/gs.sh"; echo "$GS_PROJECT $GS_PARTITION $GS_MAX_HOURS"'], cwd=folder,
+                                env=environment, capture_output=True, text=True, check=True)
+        seen[name] = result.stdout.split()
+    assert seen == {"alpha": ["alpha", "big", "48"], "beta": ["beta", "gpu", "48"], "other": ["alpha", "big", "48"]}
 
 
 def test_unknown_host_loads_nothing_and_says_so_and_inherited_settings_stay(tmp_path):
@@ -61,6 +80,20 @@ def test_gs_env_writes_settings_and_host_order(tmp_path):
     _gs("host", "login*", "c", config=tmp_path)
     entries = [line.split() for line in (tmp_path / "hosts").read_text().splitlines() if not line.startswith("#")]
     assert entries == [["n2login*", "a"], ["login*", "c"]]
+
+
+def test_set_warns_when_the_project_is_not_the_repository_project(tmp_path):
+    """Inside a repository of project alpha, settings for project alpa (a typo) are written and a warning is printed; for alpha, none."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "slurm.env").write_text("GS_PROJECT=alpha\n")
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GS_")}
+    environment["GS_CONFIG_DIR"] = str(tmp_path / "config")
+    command = [str(HOME / "bin" / "gs"), "env", "set", "a", "GS_DATA", "/scratch", "--project"]
+    typo = subprocess.run([*command, "alpa"], cwd=repo, env=environment, capture_output=True, text=True)
+    right = subprocess.run([*command, "alpha"], cwd=repo, env=environment, capture_output=True, text=True)
+    assert typo.returncode == 0 and "warning" in typo.stderr and (tmp_path / "config" / "alpa" / "a.sh").exists()
+    assert right.returncode == 0 and right.stderr == ""
 
 
 def test_install_keeps_one_block(tmp_path):

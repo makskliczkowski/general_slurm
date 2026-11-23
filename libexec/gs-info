@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Summarize the cluster, its partitions, the active settings with their source, and the known projects.
+#
+# usage: gs info
+# example: gs info
+# Prints banners: the host and the cluster it maps to, the settings files that exist, the partitions from sinfo (the ones named by GS_PARTITION and GS_CPU_PARTITION are
+# marked), every setting that is set with the file its value comes from, the settings that are not set, the project of the current
+# repository, and the projects that have settings for this cluster. It reads settings and calls sinfo; it changes nothing.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-info
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_parse "$@"
+
+# ---- the cluster ----
+detected="$(gs_cluster_detect)"
+echo "== general_slurm ${GS_VERSION} on $(gs_hostname)"
+echo "== cluster: ${GS_CLUSTER:-none loaded} (host map says ${detected:-none}; settings in ${GS_CONFIG_DIR})"
+if [[ -z "${GS_CLUSTER:-}" ]]; then
+    echo "   no cluster settings loaded: gs env host PATTERN CLUSTER, then gs env install"
+fi
+
+# ---- the settings files ----
+echo "== settings files"
+for file in "${GS_CONFIG_DIR}/hosts" "${GS_CONFIG_DIR}/${GS_CLUSTER:-_none_}.sh" "${GS_CONFIG_DIR}/${GS_PROJECT:-_none_}/${GS_CLUSTER:-_none_}.sh" \
+            "${GS_ROOT:-_none_}/slurm.env"; do
+    if [[ -f "${file}" ]]; then
+        echo "   ${file}"
+    fi
+done
+
+# ---- the partitions ----
+echo "== partitions (partition, time limit, GPUs, nodes)"
+if command -v sinfo > /dev/null; then
+    sinfo -h -o '%P|%l|%G|%D' | awk -F'|' -v gpu="${GS_PARTITION:-}" -v cpu="${GS_CPU_PARTITION:-}" '
+        {
+            gsub(/\*/, "", $1)
+            mark = ($1 == gpu) ? "  <- GS_PARTITION" : (($1 == cpu) ? "  <- GS_CPU_PARTITION" : "")
+            printf "   %-16s %-12s %-24s %s%s\n", $1, $2, $3, $4, mark
+        }
+    '
+else
+    echo "   no Slurm commands on this host"
+fi
+
+# ---- the settings ----
+echo "== settings (value, where it comes from)"
+unset_names=""
+names=()
+for entry in "${GS_SETTINGS[@]}"; do
+    read -r name _ <<< "${entry}"
+    names+=("${name}")
+done
+# the variables that the project declares in GS_REQUIRED follow the library's own
+for name in ${GS_REQUIRED:-}; do
+    names+=("${name}")
+done
+for name in "${names[@]}"; do
+    if [[ -n "${!name:-}" ]]; then
+        printf '   %-18s %-34s %s\n' "${name}" "${!name}" "$(gs_setting_source "${name}")"
+    else
+        unset_names+=" ${name}"
+    fi
+done
+echo "   not set:${unset_names:- none}"
+
+# ---- the projects ----
+echo "== project of this repository: ${GS_PROJECT:-none} (${GS_ROOT:-no slurm.env found upwards from ${PWD}})"
+echo "== projects with settings for this cluster"
+found=0
+for folder in "${GS_CONFIG_DIR}"/*/; do
+    project="$(basename "${folder}")"
+    if [[ -n "${GS_CLUSTER:-}" && -f "${folder}${GS_CLUSTER}.sh" ]]; then
+        printf '   %s%s\n' "${project}" "$([[ "${project}" == "${GS_PROJECT:-}" ]] && echo '  (this repository)')"
+        found=1
+    fi
+done
+if (( ! found )); then
+    echo "   none"
+fi
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------
