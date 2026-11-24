@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The general_slurm command: gs SUBCOMMAND [ARGUMENTS], each subcommand a file libexec/gs-SUBCOMMAND.
 #
-# usage: gs check|doctor|env|info|new|rerun|run|status|submit|table [ARGUMENTS] [--help]
+# usage: gs check|doctor|env|info|jupyter|new|rerun|run|status|submit|table [ARGUMENTS] [--help]
+#
 # example: gs submit runs/a.ini runs/b.ini --tasks 4 --print
+#
 # Without a subcommand it lists the subcommands with their summary lines.
 # -----------------------------------------------
 # Author            : Maks Kliczkowski

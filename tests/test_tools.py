@@ -48,9 +48,24 @@ def test_new_script_passes_check_and_its_help_shows_the_summary(tmp_path):
     bad = _gs("check", "bad.sh", cwd=tmp_path)
     assert bad.returncode == 1 and "no # usage: line" in bad.stdout
 
-    help_text = subprocess.run(["bash", "jobs/fit.slurm", "--help"], cwd=tmp_path, env={**os.environ, "GS_HOME": str(HOME)},
-                               capture_output=True, text=True).stdout
+    help_text = subprocess.run(["bash", "jobs/fit.slurm", "--help"], cwd=tmp_path, env={**os.environ, "GS_HOME": str(HOME)}, capture_output=True, text=True).stdout
     assert help_text.splitlines()[0].startswith("Computes INPUT")
+
+
+def test_env_set_writes_every_pair(tmp_path):
+    """gs env set takes one or more NAME VALUE pairs and writes one export line per pair into the cluster file."""
+    result = _gs("env", "set", "clusterA", "FIRST", "1", "SECOND", "two words", cwd=tmp_path, GS_CONFIG_DIR=str(tmp_path / "config"))
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "config" / "clusterA.sh").read_text().splitlines()[1:] == ['export FIRST=1', 'export SECOND="two words"']
+
+
+def test_jupyter_preview_registers_a_kernel_and_prints_the_server(tmp_path):
+    """gs jupyter --print shows the install, the kernel registration and the server line, and writes nothing."""
+    result = _gs("jupyter", "--print", "--kernel", "demo", cwd=tmp_path, GS_PYTHON="/usr/bin/python3")
+    assert result.returncode == 0, result.stderr
+    assert "ipykernel install --user --name demo" in result.stdout
+    assert "-m jupyter lab" in result.stdout and "--ServerApp.root_dir" in result.stdout
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_status_counts_tasks_by_name_and_state(tmp_path):
@@ -62,8 +77,7 @@ def test_status_counts_tasks_by_name_and_state(tmp_path):
     bin_dir = _stubs(tmp_path, sacct=SACCT)
     result  = _gs("status", "myrun", cwd=tmp_path, bin_dir=bin_dir, SACCT_OUT=str(tmp_path / "sacct.txt"))
     counts  = [line.split() for line in result.stdout.splitlines()]
-    assert counts == [["myrun_full", "CANCELLED", "1"], ["myrun_full", "COMPLETED", "1"], ["myrun_full", "FAILED", "1"],
-                      ["myrun_full", "PENDING", "5"]]
+    assert counts == [["myrun_full", "CANCELLED", "1"], ["myrun_full", "COMPLETED", "1"], ["myrun_full", "FAILED", "1"], ["myrun_full", "PENDING", "5"]]
 
 
 def test_rerun_submits_the_failed_tasks_with_the_recorded_line(tmp_path):
@@ -120,10 +134,8 @@ def test_run_submits_command_and_slurm_script(tmp_path):
     module_log  = tmp_path / "module.log"
     args_out    = tmp_path / "args.txt"
     local_env   = {key: value for key, value in os.environ.items() if not key.startswith("GS_")}
-    local_env.update({"PATH": f"{bin_dir}:{local_env['PATH']}", "GS_HOME": str(HOME), "GS_MODULES": "gcc/13", "FOO": "hello",
-                      "MODULE_LOG": str(module_log), "ARGS_OUT": str(args_out)})
-    local = subprocess.run(["bash", str(HOME / "jobs" / "run.slurm"), str(show), "{FOO}", "bar"], cwd=tmp_path, env=local_env,
-                           capture_output=True, text=True)
+    local_env.update({"PATH": f"{bin_dir}:{local_env['PATH']}", "GS_HOME": str(HOME), "GS_MODULES": "gcc/13", "FOO": "hello", "MODULE_LOG": str(module_log), "ARGS_OUT": str(args_out)})
+    local       = subprocess.run(["bash", str(HOME / "jobs" / "run.slurm"), str(show), "{FOO}", "bar"], cwd=tmp_path, env=local_env, capture_output=True, text=True)
     assert local.returncode == 0, local.stderr
     assert module_log.read_text().splitlines() == ["reset", "load gcc/13"]
     assert args_out.read_text().strip() == "hello bar"

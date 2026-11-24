@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Cluster settings by host name: set or unset a variable, map host patterns to clusters, install the loader into ~/.bashrc.
 #
-# usage: gs env set CLUSTER NAME VALUE | unset CLUSTER NAME | host PATTERN CLUSTER | install [--project P] [--before PATTERN] [--print]
-# example: gs env host 'n2*' clusterA; gs env set clusterA GS_PARTITION gpu; gs env install
+# usage: gs env set CLUSTER NAME VALUE [NAME VALUE...] | unset CLUSTER NAME | host PATTERN CLUSTER | install [--project P] [--before PATTERN] [--print]
+# example: gs env set clusterA GS_PARTITION gpu GS_GRES gpu:1; gs env host 'n2*' clusterA; gs env install
 # The files live in GS_CONFIG_DIR (default ~/.config/general_slurm): hosts, <cluster>.sh and <project>/<cluster>.sh (lib/cluster.sh).
 # set and unset change <cluster>.sh, or <project>/<cluster>.sh with --project. host adds a pattern at the end, before another pattern with
 # --before, or changes the cluster of an existing pattern; the first pattern that matches wins. install writes or replaces the marked block
@@ -138,8 +138,12 @@ install_loader() {
 # ---- the action ----
 case "${ACTION}" in
     set)
-        need_words 3 "CLUSTER NAME VALUE"
-        set_variable "${WORDS[0]}" "${WORDS[1]}" "${WORDS[2]}"
+        if (( ${#WORDS[@]} < 3 || (${#WORDS[@]} - 1) % 2 != 0 )); then
+            gs_die "set takes CLUSTER and one or more NAME VALUE pairs: $(gs_usage_line)" 2
+        fi
+        for (( i = 1; i < ${#WORDS[@]}; i += 2 )); do
+            set_variable "${WORDS[0]}" "${WORDS[i]}" "${WORDS[i + 1]}"
+        done
         ;;
     unset)
         need_words 2 "CLUSTER NAME"

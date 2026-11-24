@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Start JupyterLab in this allocation with the virtualenv of the project, after registering a kernel that inherits the job environment.
+#
+# usage: gs jupyter [--root DIR] [--ip ADDRESS] [--port PORT] [--token TOKEN] [--kernel NAME] [--print] [-- LAB-ARGS...]
+# example: gs jupyter --port 8888
+# gs_setup_env sets GS_PYTHON from GS_VENV. The kernel starts from this process and inherits its environment, so every variable exported
+# before the server (storage, caches, CUDA paths) reaches the notebook; nothing is copied into the kernel file. Words after -- go to
+# `jupyter lab`.
+# -----------------------------------------------
+# Author            : Maks Kliczkowski
+# File              : gs-jupyter
+# -----------------------------------------------
+set -euo pipefail
+source "${GS_HOME}/lib/gs.sh"
+
+# ---- arguments ----
+gs_option --root ROOT "${PWD}" "server root folder"
+gs_option --ip IP "0.0.0.0" "address to listen on"
+gs_option --port PORT "8888" "port to listen on"
+gs_option --token TOKEN "" "server token; empty lets Jupyter generate one and print it"
+gs_option --kernel KERNEL "${GS_JUPYTER_KERNEL:-${GS_PROJECT:-python}}" "kernel name"
+gs_flag --print PRINT "show the commands, change nothing"
+gs_parse "$@"
+
+if [[ ! "${KERNEL}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    gs_die "--kernel ${KERNEL} must match [A-Za-z0-9._-]+" 2
+fi
+ROOT="$(cd "${ROOT}" && pwd)"
+
+# The interpreter to use, or the one the virtualenv will have after gs_setup_env.
+preview_python() {
+    if [[ -n "${GS_PYTHON:-}" ]]; then
+        echo "${GS_PYTHON}"
+    elif [[ -n "${GS_VENV:-}" ]]; then
+        echo "${GS_VENV}/bin/python"
+    else
+        echo "<set GS_VENV>"
+    fi
+}
+
+# Print the commands to run the server and kernel, then exit. The kernel inherits the job environment, so it sees the virtualenv, storage and caches of the job.
+if (( PRINT )); then
+    python="$(preview_python)"
+    echo "root     ${ROOT}"
+    echo "kernel   ${KERNEL}"
+    echo "server   ${IP}:${PORT}"
+    echo "install  ${python} -m pip install --quiet jupyterlab ipykernel"
+    echo "register ${python} -m ipykernel install --user --name ${KERNEL} --display-name 'Python (${KERNEL})'"
+    echo "run      ${python} -m jupyter lab --ip ${IP} --no-browser --ServerApp.root_dir ${ROOT} --port ${PORT}"
+    exit 0
+fi
+
+# ---- setup and commands ----
+if [[ -z "${GS_PYTHON:-}" ]]; then
+    gs_setup_env
+fi
+: "${GS_PYTHON:?set GS_VENV in the cluster settings (gs env set CLUSTER GS_VENV path)}"
+
+# Install the server and kernel in the virtualenv of the project, so they are available to all notebooks and survive virtualenv rebuilds. The kernel inherits the job environment.
+install_server() {
+    "${GS_PYTHON}" -m pip install --quiet --disable-pip-version-check jupyterlab ipykernel
+}
+
+# Install the kernel in the user space, so it is available to all notebooks and survives virtualenv rebuilds. The kernel inherits the job
+install_kernel() {
+    "${GS_PYTHON}" -m ipykernel install --user --name "${KERNEL}" --display-name "Python (${KERNEL})"
+}
+
+# Run the server in this allocation, with the virtualenv of the project and the job environment. The kernel inherits the job environment.
+run_server() {
+    local -a arguments=(lab --ip "${IP}" --no-browser --ServerApp.root_dir "${ROOT}" --port "${PORT}")
+    if [[ -n "${TOKEN}" ]]; then
+        arguments+=(--ServerApp.token "${TOKEN}")
+    fi
+    exec "${GS_PYTHON}" -m jupyter "${arguments[@]}" "${GS_REST[@]+"${GS_REST[@]}"}"
+}
+
+install_server
+install_kernel
+run_server
+
+# -------------------------------------------
+#! EOF
+# -------------------------------------------
