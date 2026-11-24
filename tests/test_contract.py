@@ -40,11 +40,12 @@ def test_stop_signal_during_a_save_is_held_and_reported():
 
 
 def test_budget_alarm_interrupts_and_says_so():
-    """A budget of a few milliseconds raises KeyboardInterrupt and marks itself expired."""
+    """A budget of a few milliseconds raises KeyboardInterrupt, marks itself expired, and leaves no alarm behind."""
     with pytest.raises(KeyboardInterrupt):
-        budget = gs.budget_alarm(0.01)
-        signal.pause()
+        with gs.budget_alarm(0.01) as budget:
+            signal.pause()
     assert budget.expired
+    assert signal.getitimer(signal.ITIMER_REAL)[0] == 0.0
 
 
 def test_status_file_has_one_header_and_one_line_per_run(tmp_path):

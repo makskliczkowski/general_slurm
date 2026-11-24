@@ -2,9 +2,15 @@ r"""
 Stop signals of a program under the contract: a stop becomes ``KeyboardInterrupt``, a save completes before a stop takes effect, and a run
 budget fires as a stop.
 
+SIGNAL STOPPING:
+
 ``stop_on_signals`` makes SIGINT and SIGTERM raise ``KeyboardInterrupt``, which the program catches to write its checkpoint. ``held_signals``
 holds those signals while a result is saved and reports afterwards whether one came, so the program saves completely and then stops.
-``budget_alarm`` raises ``KeyboardInterrupt`` after a number of seconds (SIGALRM) and records that the budget, not a stop, ended the run.
+
+BUDGET ALARM:
+
+``budget_alarm`` raises ``KeyboardInterrupt`` after a number of seconds (SIGALRM), records that the budget, not a stop, ended the run, and
+cancels the alarm when its block ends.
 
 -----------------------------------------------
 Author          : Maks Kliczkowski
@@ -70,17 +76,19 @@ class Budget:
     expired : bool = False
 
 
-def budget_alarm(seconds: float | None) -> Budget:
+@contextmanager
+def budget_alarm(seconds: float | None) -> Iterator[Budget]:
     """
-    Raise ``KeyboardInterrupt`` after ``seconds`` of wall time; ``None`` sets no alarm.
+    Raise ``KeyboardInterrupt`` after ``seconds`` of wall time; ``None`` sets no alarm. The block cancels the alarm and restores the
+    previous SIGALRM handler when it ends, so no alarm is left for the next run.
 
     Parameters
     ----------
     seconds : float or None
         The run budget.
 
-    Returns
-    -------
+    Yields
+    ------
     Budget
         ``budget.expired`` tells afterwards whether the budget, not a stop signal, interrupted the run.
     """
@@ -90,10 +98,14 @@ def budget_alarm(seconds: float | None) -> Budget:
         budget.expired = True
         raise KeyboardInterrupt
 
-    signal.signal(signal.SIGALRM, expire)
+    previous = signal.signal(signal.SIGALRM, expire)
     if seconds:
         signal.setitimer(signal.ITIMER_REAL, seconds)
-    return budget
+    try:
+        yield budget
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0.0)
+        signal.signal(signal.SIGALRM, previous)
 
 # -------------------------------------------
 #! EOF
