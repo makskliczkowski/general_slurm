@@ -3,10 +3,6 @@
 #
 # usage: gs env set CLUSTER NAME VALUE [NAME VALUE...] | unset CLUSTER NAME | host PATTERN CLUSTER | install [--project P] [--before PATTERN] [--print]
 # example: gs env set clusterA GS_PARTITION gpu GS_GRES gpu:1; gs env host 'n2*' clusterA; gs env install
-# The files live in GS_CONFIG_DIR (default ~/.config/general_slurm): hosts, <cluster>.sh and <project>/<cluster>.sh (lib/cluster.sh).
-# set and unset change <cluster>.sh, or <project>/<cluster>.sh with --project. host adds a pattern at the end, before another pattern with
-# --before, or changes the cluster of an existing pattern; the first pattern that matches wins. install writes or replaces the marked block
-# in ~/.bashrc (GS_BASHRC replaces the path); --print shows the block and changes nothing.
 # -----------------------------------------------
 # Author            : Maks Kliczkowski
 # File              : gs-env
@@ -25,6 +21,12 @@ gs_option --project PROJECT "" "project of the settings file"
 gs_option --before BEFORE "" "host pattern to insert before"
 gs_flag --print PRINT "show the ~/.bashrc block, change nothing"
 gs_parse "$@"
+
+# The settings live in GS_CONFIG_DIR (default ~/.config/general_slurm): `hosts` maps host patterns to clusters, `<cluster>.sh` holds the
+# cluster values, and `<project>/<cluster>.sh` holds one project's values on that cluster. `set` and `unset` edit the cluster file, or the
+# project file with --project; an existing name is replaced in place and a new one is appended. `host` adds a pattern at the end of `hosts`,
+# before another pattern with --before, or changes the cluster of an existing pattern; the first match wins. `install` writes the marked
+# block of ~/.bashrc (GS_BASHRC replaces the path), and --print shows the block without writing.
 
 # Require exactly COUNT words for the action.
 need_words() {

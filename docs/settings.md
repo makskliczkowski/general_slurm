@@ -33,7 +33,7 @@ A project can use any variable name, not only `GS_*`. It sets the name in `slurm
 
 ## The cluster
 
-`gs env install` adds a marked block to `~/.bashrc`. The block sources `lib/cluster.sh` and calls `gs_cluster_load`. That function reads the host map `hosts` (`PATTERN CLUSTER` per line, a glob on the short host name, first match wins), exports `GS_CLUSTER` and sources `<cluster>.sh`. Several clusters can share one home folder and one `~/.bashrc`. `sbatch --export=ALL` hands the values to the job. `GS_CLUSTER` is already set there, so compute nodes skip host detection. A host that matches no pattern prints one warning on `stderr` and loads nothing. Starter files are `profiles/example.sh` and `profiles/hosts.example`.
+`gs env install` adds a marked block to `~/.bashrc`. `GS_BASHRC` replaces that path, and `--print` shows the block and changes nothing. The block sources `lib/cluster.sh` and calls `gs_cluster_load`. That function reads the host map `hosts` (`PATTERN CLUSTER` per line, a glob on the short host name, first match wins), exports `GS_CLUSTER` and sources `<cluster>.sh`. `gs env host` appends a pattern, puts it before another pattern with `--before`, or changes the cluster of an existing pattern; the first pattern that matches wins. Several clusters can share one home folder and one `~/.bashrc`. `sbatch --export=ALL` hands the values to the job. `GS_CLUSTER` is already set there, so compute nodes skip host detection. A host that matches no pattern prints one warning on `stderr` and loads nothing. Starter files are `profiles/example.sh` and `profiles/hosts.example`.
 
 ## Reference
 
